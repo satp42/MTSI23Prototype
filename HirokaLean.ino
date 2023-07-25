@@ -1,75 +1,63 @@
-#include <Wire.h>
-#include <Adafruit_Sensor.h>
-#include <Adafruit_ADXL345_U.h>
 #include <WiFiNINA.h>
-#include <BlynkSimpleWiFiNINA.h>
+#include <ArduinoHttpClient.h>
+#include <Wire.h>
+#include <Adafruit_ADXL345_U.h>
 
-char auth[] = "";
+#define WATER_LEVEL_SENSOR_PIN A5
+#define SENSOR_VALUE_AT_ONE_CUP 200
+#define SENSOR_VALUE_AT_TWO_CUPS 750
+#define ACCELERATION_THRESHOLD 0.8
+
+
 char ssid[] = "";
-char pass[] = "";
+char password[] = "";
+char serverAddress = "http://localhost:3000/";
+int serverPort = 3000;
+
+WiFiClient wifiClient;
+HttpClient httpClient = HttpClient(wifiClient, serverAddress, serverPort);
 
 Adafruit_ADXL345_Unified accel = Adafruit_ADXL345_Unified();
 
-bool isDrinking = false;
-int drinkCount = 0;
-
-float tiltThreshold = 1.3;
-
-unsigned long drinkTime = 2000;
-unsigned long drinkStart = 0;
-
-// Define the trigger and echo pin of ultrasonic sensor
-#define TRIGGER_PIN 2   // You can change it to any other suitable Digital IO pin
-#define ECHO_PIN 3      // You can change it to any other suitable Digital IO pin
-
 void setup() {
   Serial.begin(9600);
-
-  WiFi.begin(ssid, pass);
-  Blynk.begin(auth, ssid, pass);
-
-  if(!accel.begin()) {
-    Serial.println("no ADXL detected... Check wiring");
-    while(1);
+  while (WiFi.begin(ssid, password) != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting to WiFi...");
   }
+  Serial.println("Connected to WiFi");
 
-  // Initialize ultrasonic sensor pins
-  pinMode(TRIGGER_PIN, OUTPUT);
-  pinMode(ECHO_PIN, INPUT);
+  if (!accel.begin()){
+    Serial.println("Failed to initialize accelerometer");
+    while (1);
+  }
 }
 
 void loop() {
-  unsigned long currentMillis = millis();
-
-  // Sensing the orientation of water bottle using ultrasonic sensor
-  digitalWrite(TRIGGER_PIN, LOW);
-  delayMicroseconds(2);
-  digitalWrite(TRIGGER_PIN, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(TRIGGER_PIN, LOW);
-  
-  int distance = pulseIn(ECHO_PIN, HIGH, 20000) / 58; // Timeout after 20ms to prevent long waits if no echo received
-
-  // Assuming that water is sensed only when distance is less than 15 cm
-  if (distance < 15) {
-    // When the bottle is standing, start sensing the acceleration
-    sensors_event_t event;
-    accel.getEvent(&event);
-
-    if(event.acceleration.x > tiltThreshold || event.acceleration.y > tiltThreshold) {
-      if (!isDrinking) {
-        drinkStart = currentMillis;
-        isDrinking = true;
-      }
-      else if (isDrinking && (currentMillis - drinkStart >= drinkTime)) {
-        drinkCount++;
-        Blynk.virtualWrite(V0, drinkCount);
-        isDrinking = false;
-      }
-    } else {
-      isDrinking = false;
-    }
+  float accelZ = readAccelZ();
+  if (accelZ < ACCELERATION_THRESHOLD) {
+    float currentVolume = printWaterLevelInCups();
+    httpClient.post("/your-endpoint", "application/json", String(currentVolume, 2));
   }
+  delay(1000);
+}
 
-  Blynk.run();
+float printWaterLevelInCups() {
+  // Read the value from the sensor
+  int sensorValue = analogRead(WATER_LEVEL_SENSOR_PIN);
+  // Convert the sensor reading to volume in cups
+  float volumeInCups = mapFloat(sensorValue, SENSOR_VALUE_AT_ONE_CUP, SENSOR_VALUE_AT_TWO_CUPS, 1, 2);
+  
+  return volumeInCups;
+}
+
+float mapFloat(float x, float in_min, float in_max, float out_min, float out_max) {
+  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
+
+float readAccelZ() {
+  sensors_event_t event; 
+  accel.getEvent(&event);
+  float zAcceleration = event.acceleration.z;  // Get Z axis acceleration
+  return zAcceleration;
 }
