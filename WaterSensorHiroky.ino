@@ -1,49 +1,70 @@
-// Include WiFi library
-#include <WiFiNINA.h>
-// Define the pin for the water level sensor
-#define WATER_LEVEL_SENSOR_PIN A5
-// Define sensor readings for known volumes
-// THESE VALUES WILL NEED TO BE UPDATED BASED ON YOUR NEW SENSOR
-#define SENSOR_VALUE_AT_ONE_CUP 200   
-#define SENSOR_VALUE_AT_TWO_CUPS 750
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_ADXL345_U.h>
 
-// Define your WiFi credentials.
-#define WIFI_SSID "Your_SSID"          // Replace with your WiFi SSID
-#define WIFI_PASSWORD "Your_Password"  // Replace with your WiFi password
+#define FLOW_SENSOR_PIN A1  // The pin the flow sensor is connected to
+#define SIP_THRESHOLD 1.8  // Threshold to detect a sip
+#define PULSE_VOLUME 2.25  // Volume per pulse for the flow sensor (mL), placeholder value
+#define FLOW_CALC_INTERVAL 1000  // Calculation interval for the flow (ms)
+#define ML_PER_CUP 237.0  // Milliliters in a cup
 
-// This function maps a float value from one range to another range.
-float mapFloat(float x, float in_min, float in_max, float out_min, float out_max) {
-  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
-}
+Adafruit_ADXL345_Unified accel = Adafruit_ADXL345_Unified();
 
-void printWaterLevelInCups() {
-  // Read the value from the eTape sensor
-  int sensorValue = analogRead(WATER_LEVEL_SENSOR_PIN);
-  
-  // Convert the sensor reading to volume in cups
-  float volumeInCups = mapFloat(sensorValue, SENSOR_VALUE_AT_ONE_CUP, SENSOR_VALUE_AT_TWO_CUPS, 1, 2);
+unsigned long lastFlowCalc = 0;
+unsigned long lastAccelMeasure = 0;
 
-  // Print the volume to the serial monitor
-  Serial.print("Volume: ");
-  Serial.print(volumeInCups);
-  Serial.println(" cups");
+volatile int pulseCount = 0; // Counts flow sensor pulses
+float waterVolume = 0.0; // Total amount of water passed through sensor in mL
+unsigned int sips = 0; // Counts number of sips
+
+void flowPulseCounter()
+{
+  pulseCount++; // Increment pulse counter
 }
 
 void setup() {
-  // Begin serial communication
   Serial.begin(9600);
-  
-  // connect to WiFi
-  while (WiFi.begin(WIFI_SSID, WIFI_PASSWORD) != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+
+  if (!accel.begin()) {
+    Serial.println("Failed to start accelerometer. Check wiring, then reset.");
+    while (1);
   }
- 
-  Serial.println("WiFi connected");
+
+  // Setting the range of accelerometer
+  accel.setRange(ADXL345_RANGE_16_G);
+
+  // Set up flow sensor
+  pinMode(FLOW_SENSOR_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(FLOW_SENSOR_PIN), flowPulseCounter, RISING);
 }
 
 void loop() {
-  // Call the printWaterLevelInCups function every second
-  printWaterLevelInCups();
-  delay(1000);
+  sensors_event_t event;
+  accel.getEvent(&event);
+
+  if (millis() - lastFlowCalc >= FLOW_CALC_INTERVAL) {
+    detachInterrupt(digitalPinToInterrupt(FLOW_SENSOR_PIN));
+
+    waterVolume += pulseCount * PULSE_VOLUME;
+    lastFlowCalc = millis();
+
+    // Convert volume to cups
+    float waterVolumeCups = waterVolume / ML_PER_CUP;
+
+    Serial.print("Water Volume: ");
+    Serial.print(waterVolumeCups);
+    Serial.println(" cups");
+
+    pulseCount = 0;
+    attachInterrupt(digitalPinToInterrupt(FLOW_SENSOR_PIN), flowPulseCounter, RISING);
+  }
+
+  // if (fabs(event.acceleration.y) > SIP_THRESHOLD) {
+  //   if (millis() - lastAccelMeasure >= FLOW_CALC_INTERVAL) {
+  //     lastAccelMeasure = millis();
+  //     sips++;
+  //     Serial.print("Sips: ");
+  //     Serial.println(sips);
+  //   }
+  // }
 }
